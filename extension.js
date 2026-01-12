@@ -50,7 +50,7 @@ const choice = await vscode.window.showQuickPick([
     { label: 'Neko', value: 'oneko-classic.gif' },
     { label: 'Bhondu', value: 'oneko-dog.gif' },
     { label: 'Maia', value: 'oneko-maia.gif' },
-     { label: 'Tora', value: 'oneko-maia.gif' }
+     { label: 'Tora', value: 'oneko-tora.gif' }
   ];
   const skinPick = await vscode.window.showQuickPick(skins.map(s => s.label));
   const selected = skins.find(s => s.label === skinPick);
