@@ -4,22 +4,34 @@
   "description": "A cute cat that roams around your VS Code",
   "version": "1.0.0",
   "publisher": "parthsadaria",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Parthsadaria/oneko-vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/Parthsadaria/oneko-vscode/issues"
+  },
+  "homepage": "https://github.com/Parthsadaria/oneko-vscode",
   "engines": {
     "vscode": "^1.74.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["*"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
   "main": "./extension.js",
   "icon": "media/icon.png",
   "contributes": {
-"views": {
-  "explorer": [
-    {
-      "type": "webview",
-      "id": "onekoView",
-      "name": "Oneko Cat"
-    }
-  ]
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "onekoView",
+          "name": "Oneko Cat"
+        }
+      ]
     },
     "commands": [
       {
