@@ -1,8 +1,8 @@
 {
-  "name": "oneko-vscode",
-  "displayName": "Oneko Cat",
+  "name": "oneko-cat",
+  "displayName": "Oneko Pet Cat",
   "description": "A cute cat that roams around your VS Code",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "parthsadaria",
   "repository": {
     "type": "git",
