@@ -69,13 +69,13 @@ code --install-extension oneko-vscode-1.0.0.vsix
 ## 🖼️ Screenshots
 
 ### Cat Following Cursor
-![Following](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/main/media/following.gif)
+![Following](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/following.gif)
 
 ### Cat Sleeping
-![Sleeping](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/main/media/sleeping.gif)
+![Sleeping](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/sleeping.gif)
 
 ### Cat Roaming
-![Roaming](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/main/media/roaming.gif)
+![Roaming](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/roaming.gif)
 
 ## ⚙️ Commands
 
