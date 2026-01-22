@@ -4,6 +4,17 @@ A delightful VS Code extension that brings the classic oneko.js cat to your edit
 
 ![Oneko Cat Banner](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/main/media/banner.gif)
 
+## 🖼️ Screenshots
+
+### Cat Following Cursor
+![Following](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/following.gif)
+
+### Cat Sleeping
+![Sleeping](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/sleeping.gif)
+
+### Cat Roaming
+![Roaming](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/roaming.gif)
+
 ## ✨ Features
 
 ### 🏠 **Cozy Home Panel**
@@ -66,16 +77,6 @@ code --install-extension oneko-vscode-1.0.0.vsix
 - 🎨 **Adjust the space**: Resize the panel to create the perfect home size
 - ⚡ **Change speed**: Use the menu to make your cat slower or faster
 
-## 🖼️ Screenshots
-
-### Cat Following Cursor
-![Following](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/following.gif)
-
-### Cat Sleeping
-![Sleeping](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/sleeping.gif)
-
-### Cat Roaming
-![Roaming](https://raw.githubusercontent.com/Parthsadaria/oneko-vscode/refs/heads/main/media/roaming.gif)
 
 ## ⚙️ Commands
 
