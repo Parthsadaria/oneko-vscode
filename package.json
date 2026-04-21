@@ -2,7 +2,7 @@
   "name": "oneko-cat",
   "displayName": "Oneko Pet Cat",
   "description": "A cute cat that roams around your VS Code",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "publisher": "parthsadaria",
   "repository": {
     "type": "git",
@@ -18,9 +18,7 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "*"
-  ],
+ "activationEvents": ["*"],
   "main": "./extension.js",
   "icon": "media/icon.png",
   "contributes": {

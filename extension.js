@@ -5,7 +5,6 @@ function activate(context) {
   
   const provider = new OnekoViewProvider(context.extensionUri, context.globalState);
   
-  // Register the webview view provider for the sidebar panel
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       'onekoView',
@@ -18,7 +17,6 @@ function activate(context) {
     )
   );
   
-  // Menu command
   context.subscriptions.push(
     vscode.commands.registerCommand('oneko.showMenu', async () => {
       const choice = await vscode.window.showQuickPick([
@@ -51,9 +49,7 @@ function activate(context) {
             const fileUri = await vscode.window.showOpenDialog({
               canSelectMany: false,
               openLabel: 'Select Background Image',
-              filters: {
-                'Images': ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']
-              }
+              filters: { 'Images': ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }
             });
             if (fileUri && fileUri[0]) {
               await context.globalState.update('oneko.customBackgroundPath', fileUri[0].fsPath);
@@ -150,15 +146,12 @@ class OnekoViewProvider {
     if (savedState) {
       this.sendMessage({ command: 'restoreState', state: savedState });
     }
-    
     if (savedSkin) {
       this.sendMessage({ command: 'setSkin', skin: savedSkin });
     }
-    
     if (savedSpeed) {
       this.sendMessage({ command: 'setSpeed', speed: savedSpeed });
     }
-    
     if (savedCustomBgPath) {
       try {
         const fileUri = vscode.Uri.file(savedCustomBgPath);
@@ -199,23 +192,19 @@ class OnekoViewProvider {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src ${webview.cspSource} data: https: vscode-webview-resource:;">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    body {
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
       background: var(--vscode-sideBar-background);
       color: var(--vscode-sideBar-foreground);
       font-family: var(--vscode-font-family);
       overflow: hidden;
-      height: 100vh;
-      position: relative;
-    }
-    #container {
       width: 100%;
       height: 100%;
       position: relative;
+    }
+    #container {
+      position: absolute;
+      inset: 0;
       min-height: 300px;
     }
     #oneko {
@@ -227,10 +216,9 @@ class OnekoViewProvider {
       image-rendering: pixelated;
       cursor: grab;
       z-index: 999;
+      transition: none;
     }
-    #oneko:active {
-      cursor: grabbing;
-    }
+    #oneko:active { cursor: grabbing; }
     #ball {
       width: 20px;
       height: 20px;
@@ -242,9 +230,7 @@ class OnekoViewProvider {
       z-index: 998;
       display: none;
     }
-    #ball.active {
-      display: block;
-    }
+    #ball.active { display: block; }
   </style>
 </head>
 <body>
@@ -259,212 +245,298 @@ class OnekoViewProvider {
       const nekoEl = document.getElementById('oneko');
       const ballEl = document.getElementById('ball');
       const container = document.getElementById('container');
-      
-      let nekoPosX = 100;
-      let nekoPosY = 100;
-      let mousePosX = nekoPosX;
-      let mousePosY = nekoPosY;
-      let frameCount = 0;
-      let idleTime = 0;
-      let idleAnimation = null;
-      let idleAnimationFrame = 0;
-      let forceSleep = false;
-      let grabbing = false;
-      let grabStop = true;
-      let nudge = false;
-      let nekoSpeed = 10;
-      let isFollowing = false;
-      let roamTarget = null;
-      let roamTimer = null;
-      
+
+      // ── helpers ──────────────────────────────────────────────────────────────
+      function getRect() {
+        // clientWidth/clientHeight is more reliable than getBoundingClientRect in VSCode webviews.
+        // Subtract 4px bottom inset so ball never clips under the panel chrome.
+        return {
+          width:  Math.max(container.clientWidth  || window.innerWidth,  100),
+          height: Math.max((container.clientHeight || window.innerHeight) - 4, 200)
+        };
+      }
+
+      function clampX(x) { const r = getRect(); return Math.min(Math.max(16, x), r.width  - 16); }
+      function clampY(y) { const r = getRect(); return Math.min(Math.max(16, y), r.height - 16); }
+      function clampBallX(x) { const r = getRect(); return Math.min(Math.max(ballRadius, x), r.width  - ballRadius); }
+      function clampBallY(y) { const r = getRect(); return Math.min(Math.max(ballRadius, y), r.height - ballRadius); }
+
+      // ── state ─────────────────────────────────────────────────────────────────
+      let rect = getRect();
+      let nekoPosX   = rect.width  / 2;
+      let nekoPosY   = rect.height / 2;
+      let mousePosX  = nekoPosX;
+      let mousePosY  = nekoPosY;
+
+      let frameCount        = 0;
+      let idleTime          = 0;
+      let idleAnimation     = null;
+      let idleAnimationFrame= 0;
+      let forceSleep        = false;
+      let grabbing          = false;
+      let grabStop          = true;
+      let nudge             = false;
+      let nekoSpeed         = 10;
+      let isFollowing       = false;
+      let roamTarget        = null;
+      let roamTimer         = null;
+
+      // wall-stuck detection
+      let stuckFrames   = 0;
+      let lastNekoX     = nekoPosX;
+      let lastNekoY     = nekoPosY;
+      const STUCK_LIMIT = 25; // frames before we force a new roam target
+
+      // cat personality / mood
+      // moods: 'normal' | 'zoomies' | 'curious' | 'aloof' | 'bored'
+      let catMood           = 'normal';
+      let moodTimer         = 0;
+      let zoomiesSpeed      = nekoSpeed * 2.5;
+      let ignoreMouseUntil  = 0;   // timestamp — cat ignores cursor while aloof
+      let tailWagFrame      = 0;
+
       // Ball physics
-      let ballActive = false;
-      let ballX = 200;
-      let ballY = 200;
-      let ballVelX = 0;
-      let ballVelY = 0;
-      let ballRadius = 10;
-      let friction = 0.97;
+      let ballActive  = false;
+      let ballX       = 0;   // will be set properly on toggle
+      let ballY       = 0;
+      let ballVelX    = 0;
+      let ballVelY    = 0;
+      const ballRadius= 10;
+      const friction  = 0.97;
       let ballGrabbed = false;
       let chasingBall = false;
-      
+      // Throttle chase-decision so it isn't re-rolled every frame
+      let chaseDecisionCooldown = 0;
+
+      // ── sprite map ────────────────────────────────────────────────────────────
       const spriteSets = {
-        idle: [[-3, -3]],
-        alert: [[-7, -3]],
-        scratchSelf: [[-5, 0], [-6, 0], [-7, 0]],
-        scratchWallN: [[0, 0], [0, -1]],
-        scratchWallS: [[-7, -1], [-6, -2]],
-        scratchWallE: [[-2, -2], [-2, -3]],
-        scratchWallW: [[-4, 0], [-4, -1]],
-        tired: [[-3, -2]],
-        sleeping: [[-2, 0], [-2, -1]],
-        N: [[-1, -2], [-1, -3]],
-        NE: [[0, -2], [0, -3]],
-        E: [[-3, 0], [-3, -1]],
-        SE: [[-5, -1], [-5, -2]],
-        S: [[-6, -3], [-7, -2]],
-        SW: [[-5, -3], [-6, -1]],
-        W: [[-4, -2], [-4, -3]],
-        NW: [[-1, 0], [-1, -1]]
+        idle:         [[-3, -3]],
+        alert:        [[-7, -3]],
+        scratchSelf:  [[-5, 0], [-6, 0], [-7, 0]],
+        scratchWallN: [[0, 0],  [0, -1]],
+        scratchWallS: [[-7,-1], [-6,-2]],
+        scratchWallE: [[-2,-2], [-2,-3]],
+        scratchWallW: [[-4, 0], [-4,-1]],
+        tired:        [[-3,-2]],
+        sleeping:     [[-2, 0], [-2,-1]],
+        N:  [[-1,-2], [-1,-3]],
+        NE: [[ 0,-2], [ 0,-3]],
+        E:  [[-3, 0], [-3,-1]],
+        SE: [[-5,-1], [-5,-2]],
+        S:  [[-6,-3], [-7,-2]],
+        SW: [[-5,-3], [-6,-1]],
+        W:  [[-4,-2], [-4,-3]],
+        NW: [[-1, 0], [-1,-1]]
       };
-      
+
+      // ── save / restore ────────────────────────────────────────────────────────
       function saveState() {
-        const state = {
-          nekoPosX,
-          nekoPosY,
-          forceSleep,
-          nekoSpeed,
-          ballActive,
-          ballX,
-          ballY
-        };
-        vscode.postMessage({ command: 'saveState', state });
+        vscode.postMessage({ command: 'saveState', state: {
+          nekoPosX, nekoPosY, forceSleep, nekoSpeed,
+          ballActive, ballX, ballY
+        }});
       }
-      
       setInterval(saveState, 2000);
-      
+
+      // ── sprite ────────────────────────────────────────────────────────────────
       function setSprite(name, frame) {
-        const sprite = spriteSets[name][frame % spriteSets[name].length];
+        const set = spriteSets[name];
+        if (!set) return;
+        const sprite = set[frame % set.length];
         nekoEl.style.backgroundPosition = \`\${sprite[0] * 32}px \${sprite[1] * 32}px\`;
       }
-      
+
       function resetIdleAnimation() {
-        idleAnimation = null;
+        idleAnimation      = null;
         idleAnimationFrame = 0;
       }
-      
-      function getRandomRoamTarget() {
-        const rect = container.getBoundingClientRect();
+
+      // ── mood system ───────────────────────────────────────────────────────────
+      function pickNewMood() {
+        const moods = ['normal', 'normal', 'normal', 'curious', 'aloof', 'bored'];
+        catMood   = moods[Math.floor(Math.random() * moods.length)];
+        moodTimer = 300 + Math.floor(Math.random() * 400); // frames
+
+        if (catMood === 'aloof') {
+          ignoreMouseUntil = Date.now() + 6000 + Math.random() * 8000;
+        }
+        if (catMood === 'bored') {
+          // bored cats do zoomies eventually
+          setTimeout(() => {
+            if (catMood === 'bored') {
+              catMood    = 'zoomies';
+              moodTimer  = 60 + Math.floor(Math.random() * 80);
+              zoomiesSpeed = nekoSpeed * 2.2 + Math.random() * nekoSpeed;
+            }
+          }, 2000 + Math.random() * 3000);
+        }
+      }
+
+      function tickMood() {
+        moodTimer--;
+        if (moodTimer <= 0) pickNewMood();
+      }
+
+      // ── roam ──────────────────────────────────────────────────────────────────
+      function getSafeRoamTarget() {
+        const r = getRect();
+        const margin = 40;
         return {
-          x: Math.random() * (rect.width - 64) + 32,
-          y: Math.random() * (rect.height - 64) + 32
+          x: margin + Math.random() * (r.width  - margin * 2),
+          y: margin + Math.random() * (r.height - margin * 2)
         };
       }
-      
+
       function startRoaming() {
         if (roamTimer) clearInterval(roamTimer);
         roamTimer = setInterval(() => {
           if (!isFollowing && !forceSleep && !grabbing && !chasingBall) {
-            roamTarget = getRandomRoamTarget();
+            // Curious cats pick targets near edges; bored cats roam more; aloof cats sit still
+            if (catMood === 'aloof') return;
+            roamTarget = getSafeRoamTarget();
           }
-        }, 5000 + Math.random() * 10000);
+        }, 4000 + Math.random() * 8000);
       }
-      
+
+      // ── stuck detection ───────────────────────────────────────────────────────
+      function checkStuck() {
+        const dx = Math.abs(nekoPosX - lastNekoX);
+        const dy = Math.abs(nekoPosY - lastNekoY);
+        if (dx < 0.5 && dy < 0.5 && (roamTarget || chasingBall)) {
+          stuckFrames++;
+          if (stuckFrames > STUCK_LIMIT) {
+            if (chasingBall) {
+              // Cat is stuck chasing ball — give up chasing and roam away from wall
+              chasingBall          = false;
+              chaseDecisionCooldown= 60; // long cooldown so cat doesn't immediately retry
+              // Roam to center-ish so it doesn't hug the wall
+              const r = getRect();
+              roamTarget = {
+                x: r.width  / 2 + (Math.random() - 0.5) * r.width  * 0.3,
+                y: r.height / 2 + (Math.random() - 0.5) * r.height * 0.3
+              };
+            } else {
+              roamTarget = getSafeRoamTarget();
+            }
+            isFollowing = false;
+            stuckFrames = 0;
+            resetIdleAnimation();
+          }
+        } else {
+          stuckFrames = 0;
+        }
+        lastNekoX = nekoPosX;
+        lastNekoY = nekoPosY;
+      }
+
+      // ── ball ──────────────────────────────────────────────────────────────────
       function updateBall() {
         if (!ballActive || ballGrabbed) return;
-        
-        const rect = container.getBoundingClientRect();
-        
-        // Apply friction
+
         ballVelX *= friction;
         ballVelY *= friction;
-        
-        // Update position
-        ballX += ballVelX;
-        ballY += ballVelY;
-        
-        // Wall collisions with bounce
-        if (ballX - ballRadius < 0) {
-          ballX = ballRadius;
-          ballVelX = Math.abs(ballVelX) * 0.8;
-        }
-        if (ballX + ballRadius > rect.width) {
-          ballX = rect.width - ballRadius;
-          ballVelX = -Math.abs(ballVelX) * 0.8;
-        }
-        if (ballY - ballRadius < 0) {
-          ballY = ballRadius;
-          ballVelY = Math.abs(ballVelY) * 0.8;
-        }
-        if (ballY + ballRadius > rect.height) {
-          ballY = rect.height - ballRadius;
-          ballVelY = -Math.abs(ballVelY) * 0.8;
-        }
-        
-        // Stop if moving very slowly
-        if (Math.abs(ballVelX) < 0.1 && Math.abs(ballVelY) < 0.1) {
-          ballVelX = 0;
-          ballVelY = 0;
-        }
-        
-        // Check collision with cat - prevent overlap and apply force
-        const catDist = Math.sqrt((nekoPosX - ballX) ** 2 + (nekoPosY - ballY) ** 2);
-        const minDist = 16 + ballRadius + 2; // Cat radius + ball radius + small buffer
-        
-        if (catDist < minDist && !grabbing) {
-          // Push cat away from ball to prevent overlap
+        ballX    += ballVelX;
+        ballY    += ballVelY;
+
+        const r = getRect();
+
+        // Wall bounce
+        if (ballX - ballRadius < 0)          { ballX = ballRadius;           ballVelX =  Math.abs(ballVelX) * 0.8; }
+        if (ballX + ballRadius > r.width)    { ballX = r.width - ballRadius; ballVelX = -Math.abs(ballVelX) * 0.8; }
+        if (ballY - ballRadius < 0)          { ballY = ballRadius;           ballVelY =  Math.abs(ballVelY) * 0.8; }
+        if (ballY + ballRadius > r.height)   { ballY = r.height - ballRadius;ballVelY = -Math.abs(ballVelY) * 0.8; }
+
+        if (Math.abs(ballVelX) < 0.1 && Math.abs(ballVelY) < 0.1) { ballVelX = 0; ballVelY = 0; }
+
+        // Wall repulsion — gentle inward drift so ball never sits dead in a corner
+        const repulseZone = 55;
+        const repulseMax  = 0.15;
+        if (ballX < repulseZone)            ballVelX += repulseMax * (1 - ballX / repulseZone);
+        if (ballX > r.width  - repulseZone) ballVelX -= repulseMax * (1 - (r.width  - ballX) / repulseZone);
+        if (ballY < repulseZone)            ballVelY += repulseMax * (1 - ballY / repulseZone);
+        if (ballY > r.height - repulseZone) ballVelY -= repulseMax * (1 - (r.height - ballY) / repulseZone);
+
+        // Cat ↔ ball collision
+        const catDist = Math.hypot(nekoPosX - ballX, nekoPosY - ballY);
+        const minDist = 16 + ballRadius + 2;
+        if (catDist < minDist && catDist > 0 && !grabbing) {
           const angle = Math.atan2(nekoPosY - ballY, nekoPosX - ballX);
-          const overlap = minDist - catDist;
-          nekoPosX = ballX + Math.cos(angle) * minDist;
-          nekoPosY = ballY + Math.sin(angle) * minDist;
-          
-          // Clamp cat position within bounds
-          nekoPosX = Math.min(Math.max(16, nekoPosX), rect.width - 16);
-          nekoPosY = Math.min(Math.max(16, nekoPosY), rect.height - 16);
-          
+          nekoPosX = clampX(ballX + Math.cos(angle) * minDist);
+          nekoPosY = clampY(ballY + Math.sin(angle) * minDist);
           nekoEl.style.left = \`\${nekoPosX - 16}px\`;
-          nekoEl.style.top = \`\${nekoPosY - 16}px\`;
-          
-          // Cat taps the ball - apply force based on approach direction
+          nekoEl.style.top  = \`\${nekoPosY - 16}px\`;
+
           if (chasingBall) {
-            const tapAngle = Math.atan2(ballY - nekoPosY, ballX - nekoPosX);
-            const tapStrength = 3 + Math.random() * 2; // Random variation for playfulness
-            ballVelX += Math.cos(tapAngle) * tapStrength;
-            ballVelY += Math.sin(tapAngle) * tapStrength;
-            
-            // Clamp max ball velocity
-            const maxVel = 15;
-            const currentVel = Math.sqrt(ballVelX ** 2 + ballVelY ** 2);
-            if (currentVel > maxVel) {
-              ballVelX = (ballVelX / currentVel) * maxVel;
-              ballVelY = (ballVelY / currentVel) * maxVel;
-            }
+            const cx = r.width  / 2;
+            const cy = r.height / 2;
+            const nearWall = ballX < 45 || ballX > r.width - 45 || ballY < 45 || ballY > r.height - 45;
+            const catAngle      = Math.atan2(ballY - nekoPosY, ballX - nekoPosX);
+            const toCenterAngle = Math.atan2(cy - ballY, cx - ballX);
+            const blend  = nearWall ? 0.9 : 0.25;
+            const lerpX  = Math.cos(catAngle) * (1 - blend) + Math.cos(toCenterAngle) * blend;
+            const lerpY  = Math.sin(catAngle) * (1 - blend) + Math.sin(toCenterAngle) * blend;
+            const tapAngle = Math.atan2(lerpY, lerpX);
+            // Weak tap — cat paws gently, ball shouldn't rocket into walls
+            const tapStr = (nearWall ? 2.5 : 2.0) + Math.random() * 1.5;
+            ballVelX += Math.cos(tapAngle) * tapStr;
+            ballVelY += Math.sin(tapAngle) * tapStr;
+            // Low max vel — ball rolls, doesn't fly
+            const maxVel = 7;
+            const curVel = Math.hypot(ballVelX, ballVelY);
+            if (curVel > maxVel) { ballVelX = (ballVelX/curVel)*maxVel; ballVelY = (ballVelY/curVel)*maxVel; }
           }
         }
-        
+
+        // Hard clamp every frame — ball can NEVER be outside bounds regardless of
+        // stale getRect, resize events, or physics tunneling
+        ballX = Math.max(ballRadius, Math.min(r.width  - ballRadius, ballX));
+        ballY = Math.max(ballRadius, Math.min(r.height - ballRadius, ballY));
+
         ballEl.style.left = \`\${ballX - ballRadius}px\`;
-        ballEl.style.top = \`\${ballY - ballRadius}px\`;
+        ballEl.style.top  = \`\${ballY  - ballRadius}px\`;
       }
-      
+
+      // ── idle behaviour ────────────────────────────────────────────────────────
       function idle() {
-        idleTime += 1;
-        
-        if (idleTime > 100 && !forceSleep && Math.random() < 0.01) {
+        idleTime++;
+        tickMood();
+
+        // Cat may fall asleep on its own if idle long enough
+        if (idleTime > 120 && !forceSleep && Math.random() < 0.008) {
           forceSleep = true;
           saveState();
         }
-        
+
         if (idleTime > 10 && Math.floor(Math.random() * 200) === 0 && idleAnimation == null) {
-          let availableIdleAnimations = ['sleeping', 'scratchSelf'];
-          const rect = container.getBoundingClientRect();
-          if (nekoPosX < 32) availableIdleAnimations.push('scratchWallW');
-          if (nekoPosY < 32) availableIdleAnimations.push('scratchWallN');
-          if (nekoPosX > rect.width - 32) availableIdleAnimations.push('scratchWallE');
-          if (nekoPosY > rect.height - 32) availableIdleAnimations.push('scratchWallS');
-          idleAnimation = availableIdleAnimations[Math.floor(Math.random() * availableIdleAnimations.length)];
+          const r = getRect();
+          let pool = ['scratchSelf', 'scratchSelf'];           // weighted
+          if (catMood === 'curious') pool.push('alert');       // peek around
+          if (nekoPosX < 32)            pool.push('scratchWallW');
+          if (nekoPosY < 32)            pool.push('scratchWallN');
+          if (nekoPosX > r.width  - 32) pool.push('scratchWallE');
+          if (nekoPosY > r.height - 32) pool.push('scratchWallS');
+          // Never include 'sleeping' here — handled separately via forceSleep
+          idleAnimation = pool[Math.floor(Math.random() * pool.length)];
         }
-        
-        if (forceSleep) {
-          idleAnimation = 'sleeping';
-        }
-        
+
+        if (forceSleep) idleAnimation = 'sleeping';
+
         switch (idleAnimation) {
           case 'sleeping':
             if (idleAnimationFrame < 8 && nudge && forceSleep) {
-              setSprite('idle', 0);
-              break;
+              setSprite('idle', 0); break;
             } else if (nudge) {
               nudge = false;
               resetIdleAnimation();
             }
-            if (idleAnimationFrame < 8) {
-              setSprite('tired', 0);
-              break;
-            }
+            if (idleAnimationFrame < 8) { setSprite('tired', 0); break; }
             setSprite('sleeping', Math.floor(idleAnimationFrame / 4));
-            if (idleAnimationFrame > 192 && !forceSleep) {
-              resetIdleAnimation();
-            }
+            if (idleAnimationFrame > 192 && !forceSleep) resetIdleAnimation();
+            break;
+          case 'alert':
+            // curious peek — look around then return
+            setSprite('alert', 0);
+            if (idleAnimationFrame > 20) resetIdleAnimation();
             break;
           case 'scratchWallN':
           case 'scratchWallS':
@@ -472,364 +544,403 @@ class OnekoViewProvider {
           case 'scratchWallW':
           case 'scratchSelf':
             setSprite(idleAnimation, idleAnimationFrame);
-            if (idleAnimationFrame > 9) {
-              resetIdleAnimation();
-            }
+            if (idleAnimationFrame > 9) resetIdleAnimation();
             break;
           default:
             setSprite('idle', 0);
             return;
         }
-        idleAnimationFrame += 1;
+        idleAnimationFrame++;
       }
-      
+
+      // ── main frame ────────────────────────────────────────────────────────────
       function frame() {
-        frameCount += 1;
+        frameCount++;
         updateBall();
-        
+        checkStuck();
+        if (chaseDecisionCooldown > 0) chaseDecisionCooldown--;
+
         if (grabbing) {
           grabStop && setSprite('alert', 0);
           return;
         }
-        
+
+        const aloof = catMood === 'aloof' && Date.now() < ignoreMouseUntil;
+        const speed = (catMood === 'zoomies') ? zoomiesSpeed : nekoSpeed;
+
         let targetX = mousePosX;
         let targetY = mousePosY;
-        
-        // Ball chasing logic
-        if (ballActive && !ballGrabbed && !forceSleep) {
-          const ballDist = Math.sqrt((nekoPosX - ballX) ** 2 + (nekoPosY - ballY) ** 2);
-          const ballMoving = Math.abs(ballVelX) > 0.5 || Math.abs(ballVelY) > 0.5;
-          const ballSlow = Math.abs(ballVelX) < 2 && Math.abs(ballVelY) < 2;
-          
-          // Start chasing if ball is moving and within range
-          if (ballMoving && ballDist < 200 && Math.random() < 0.3) {
-            chasingBall = true;
-            isFollowing = false;
-            roamTarget = null;
-          }
-          
-          // When chasing, approach the ball strategically
-          if (chasingBall) {
-            const approachDist = 16 + ballRadius + 8; // Stop a bit away from the ball
-            
-            if (ballMoving) {
-              // Intercept moving ball - predict where it will be
-              const predictionTime = 0.3;
-              const predictX = ballX + ballVelX * predictionTime * 10;
-              const predictY = ballY + ballVelY * predictionTime * 10;
-              targetX = predictX;
-              targetY = predictY;
-            } else if (ballSlow || !ballMoving) {
-              // Ball stopped or very slow - circle around it playfully
-              const circleAngle = (frameCount * 0.05) + (Math.random() - 0.5) * 0.3;
-              const circleRadius = approachDist + 5;
-              targetX = ballX + Math.cos(circleAngle) * circleRadius;
-              targetY = ballY + Math.sin(circleAngle) * circleRadius;
-              
-              // Occasionally pounce at the ball
-              if (Math.random() < 0.02) {
-                targetX = ballX;
-                targetY = ballY;
-              }
+
+        // ── ball chasing ──
+        if (ballActive && !ballGrabbed && !forceSleep && !aloof) {
+          const ballDist   = Math.hypot(nekoPosX - ballX, nekoPosY - ballY);
+          const ballSpeed  = Math.hypot(ballVelX, ballVelY);
+          const ballMoving = ballSpeed > 0.5;
+
+          // Start chasing: ball is moving OR nearby (cat gets curious even about still ball)
+          if (!chasingBall && chaseDecisionCooldown === 0) {
+            const shouldChase = (ballMoving && ballDist < 240) || (ballDist < 80 && Math.random() < 0.02);
+            if (shouldChase && Math.random() < 0.18) {
+              chasingBall          = true;
+              isFollowing          = false;
+              roamTarget           = null;
+              chaseDecisionCooldown= 20;
             }
-            
-            // Stop chasing if ball is very far or stopped for too long
-            if (ballDist > 250 || (!ballMoving && Math.random() < 0.005)) {
-              chasingBall = false;
+          }
+
+          if (chasingBall) {
+            const r           = getRect();
+            const approachDist= 16 + ballRadius + 14;
+            const wallMargin  = 40;
+            const nearLeft    = ballX < wallMargin;
+            const nearRight   = ballX > r.width  - wallMargin;
+            const nearTop     = ballY < wallMargin;
+            const nearBottom  = ballY > r.height - wallMargin;
+            const nearWall    = nearLeft || nearRight || nearTop || nearBottom;
+            const cx          = r.width  / 2;
+            const cy          = r.height / 2;
+
+            // Angle FROM center TO ball — points toward the wall/corner the ball is against
+            const toCornerAngle = Math.atan2(ballY - cy, ballX - cx);
+            // Angle FROM ball TO center — the direction we want to hit it
+            const toOpenAngle   = toCornerAngle + Math.PI;
+
+            if (nearWall) {
+              // Cat needs to get to the CORNER SIDE of the ball (same side as wall)
+              // so it can push the ball back toward open space.
+              // Phase 1: arc around to the corner side
+              // Phase 2: once there, push through toward center
+
+              // Target position is ON THE WALL SIDE of the ball, offset further into corner
+              const cornerApproach = approachDist + 6;
+              const rawTX = ballX + Math.cos(toCornerAngle) * cornerApproach;
+              const rawTY = ballY + Math.sin(toCornerAngle) * cornerApproach;
+
+              // This target may be out of bounds (inside the wall) — that's fine,
+              // the cat will arc along the edge to get as close as it can,
+              // naturally curving around the ball from the wall side.
+              // Clamp loosely — allow cat to get close to edge
+              targetX = Math.min(Math.max(8, rawTX), r.width  - 8);
+              targetY = Math.min(Math.max(8, rawTY), r.height - 8);
+
+            } else if (!ballMoving) {
+              // Stopped in open space — circle playfully
+              const circleR = approachDist + Math.sin(frameCount * 0.03) * 8;
+              targetX = Math.min(Math.max(16, ballX + Math.cos(frameCount * 0.035) * circleR), r.width  - 16);
+              targetY = Math.min(Math.max(16, ballY + Math.sin(frameCount * 0.035) * circleR), r.height - 16);
+              if (Math.random() < 0.012) { targetX = ballX; targetY = ballY; }
+
+            } else {
+              // Ball moving in open space — intercept from behind
+              const velAngle    = Math.atan2(ballVelY, ballVelX);
+              const behindAngle = velAngle + Math.PI + Math.sin(frameCount * 0.07) * 0.35;
+              targetX = Math.min(Math.max(16, ballX + Math.cos(behindAngle) * approachDist), r.width  - 16);
+              targetY = Math.min(Math.max(16, ballY + Math.sin(behindAngle) * approachDist), r.height - 16);
+            }
+
+            if (ballDist > 280 || (!ballMoving && !nearWall && Math.random() < 0.003)) {
+              chasingBall          = false;
+              chaseDecisionCooldown= 30;
             }
           }
         }
-        
+
+        // ── roam target fallback ──
         if (!isFollowing && !chasingBall && roamTarget && !forceSleep) {
           targetX = roamTarget.x;
           targetY = roamTarget.y;
         }
-        
-        const diffX = nekoPosX - targetX;
-        const diffY = nekoPosY - targetY;
-        const distance = Math.sqrt(diffX ** 2 + diffY ** 2);
-        
-        if (roamTarget && distance < 10) {
-          roamTarget = null;
+
+        // If aloof, cat just stays put (idle)
+        if (aloof && !chasingBall) {
+          idle();
+          return;
         }
-        
-        if (forceSleep && Math.abs(diffY) < nekoSpeed && Math.abs(diffX) < nekoSpeed) {
-          nekoPosX = targetX;
-          nekoPosY = targetY;
+
+        const diffX    = nekoPosX - targetX;
+        const diffY    = nekoPosY - targetY;
+        const distance = Math.hypot(diffX, diffY);
+
+        // Clear roam target on arrival
+        if (roamTarget && distance < 12) roamTarget = null;
+
+        if (forceSleep && distance < speed) {
+          nekoPosX = clampX(targetX);
+          nekoPosY = clampY(targetY);
           nekoEl.style.left = \`\${nekoPosX - 16}px\`;
-          nekoEl.style.top = \`\${nekoPosY - 16}px\`;
+          nekoEl.style.top  = \`\${nekoPosY - 16}px\`;
           idle();
           return;
         }
-        
-        if ((distance < nekoSpeed || distance < 48) && !forceSleep && !roamTarget && !chasingBall) {
+
+        const stopDist = (chasingBall) ? 0 : 48;
+        if ((distance < speed || distance < stopDist) && !forceSleep && !roamTarget && !chasingBall) {
           idle();
           return;
         }
-        
-        idleAnimation = null;
+
+        idleAnimation      = null;
         idleAnimationFrame = 0;
-        
+
+        // Alert flash when waking up
         if (idleTime > 1) {
           setSprite('alert', 0);
           idleTime = Math.min(idleTime, 7);
-          idleTime -= 1;
+          idleTime--;
           return;
         }
-        
-        let direction = diffY / distance > 0.5 ? 'N' : '';
-        direction += diffY / distance < -0.5 ? 'S' : '';
-        direction += diffX / distance > 0.5 ? 'W' : '';
-        direction += diffX / distance < -0.5 ? 'E' : '';
+        idleTime = 0;
+
+        // Direction sprite
+        let direction = '';
+        if (distance > 0) {
+          if (diffY / distance >  0.5) direction += 'N';
+          if (diffY / distance < -0.5) direction += 'S';
+          if (diffX / distance >  0.5) direction += 'W';
+          if (diffX / distance < -0.5) direction += 'E';
+        }
+        if (!direction) direction = 'idle';
         setSprite(direction, frameCount);
-        
-        nekoPosX -= (diffX / distance) * nekoSpeed;
-        nekoPosY -= (diffY / distance) * nekoSpeed;
-        
-        const rect = container.getBoundingClientRect();
-        nekoPosX = Math.min(Math.max(16, nekoPosX), rect.width - 16);
-        nekoPosY = Math.min(Math.max(16, nekoPosY), rect.height - 16);
-        
+
+        if (distance > 0) {
+          nekoPosX = clampX(nekoPosX - (diffX / distance) * speed);
+          nekoPosY = clampY(nekoPosY - (diffY / distance) * speed);
+        }
+
         nekoEl.style.left = \`\${nekoPosX - 16}px\`;
-        nekoEl.style.top = \`\${nekoPosY - 16}px\`;
+        nekoEl.style.top  = \`\${nekoPosY - 16}px\`;
       }
-      
-      let mouseInteractions = 0;
+
+      // ── mouse interaction ─────────────────────────────────────────────────────
+      let mouseInteractions  = 0;
       let interactionTimeout = null;
-      
+
       container.addEventListener('mousemove', (e) => {
         if (forceSleep) return;
-        
-        const rect = container.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-        const distance = Math.sqrt((mouseX - nekoPosX) ** 2 + (mouseY - nekoPosY) ** 2);
-        
-        if (distance < 100 && !isFollowing && !chasingBall) {
+        const r    = container.getBoundingClientRect();
+        const mx   = e.clientX - r.left;
+        const my   = e.clientY - r.top;
+        const dist = Math.hypot(mx - nekoPosX, my - nekoPosY);
+
+        const aloof = catMood === 'aloof' && Date.now() < ignoreMouseUntil;
+        if (aloof) return;  // cat ignores you when feeling aloof
+
+        if (dist < 100 && !isFollowing && !chasingBall) {
           mouseInteractions++;
           clearTimeout(interactionTimeout);
-          
           if (mouseInteractions >= 2) {
-            isFollowing = true;
-            mousePosX = mouseX;
-            mousePosY = mouseY;
-            forceSleep = false;
-            roamTarget = null;
-            
-            setTimeout(() => {
-              isFollowing = false;
-              mouseInteractions = 0;
-            }, 8000 + Math.random() * 7000);
+            isFollowing  = true;
+            mousePosX    = mx;
+            mousePosY    = my;
+            forceSleep   = false;
+            roamTarget   = null;
+            setTimeout(() => { isFollowing = false; mouseInteractions = 0; },
+              8000 + Math.random() * 7000);
           }
-          
-          interactionTimeout = setTimeout(() => {
-            mouseInteractions = 0;
-          }, 3000);
+          interactionTimeout = setTimeout(() => { mouseInteractions = 0; }, 3000);
         }
-        
-        if (isFollowing) {
-          mousePosX = mouseX;
-          mousePosY = mouseY;
-        }
+
+        if (isFollowing) { mousePosX = mx; mousePosY = my; }
       });
-      
-      // Ball interaction
+
+      // ── ball drag ─────────────────────────────────────────────────────────────
       ballEl.addEventListener('mousedown', (e) => {
         if (!ballActive) return;
         e.stopPropagation();
         ballGrabbed = true;
         chasingBall = false;
-        const rect = container.getBoundingClientRect();
-        let lastX = e.clientX - rect.left;
-        let lastY = e.clientY - rect.top;
-        let lastTime = Date.now();
-        
-        const mousemove = (e) => {
-          const rect = container.getBoundingClientRect();
-          const currentX = e.clientX - rect.left;
-          const currentY = e.clientY - rect.top;
-          const currentTime = Date.now();
-          const dt = (currentTime - lastTime) / 16.67;
-          
-          ballVelX = (currentX - lastX) / dt;
-          ballVelY = (currentY - lastY) / dt;
-          
-          ballX = currentX;
-          ballY = currentY;
-          
-          lastX = currentX;
-          lastY = currentY;
-          lastTime = currentTime;
+        const r     = container.getBoundingClientRect();
+        let lx      = e.clientX - r.left;
+        let ly      = e.clientY - r.top;
+        let lt      = Date.now();
+
+        const mm = (e) => {
+          const r2 = container.getBoundingClientRect();
+          const cx = e.clientX - r2.left;
+          const cy = e.clientY - r2.top;
+          const dt = Math.max((Date.now() - lt) / 16.67, 0.1);
+          ballVelX  = (cx - lx) / dt;
+          ballVelY  = (cy - ly) / dt;
+          ballX     = clampBallX(cx);
+          ballY     = clampBallY(cy);
+          lx = cx; ly = cy; lt = Date.now();
         };
-        
-        const mouseup = () => {
+        const mu = () => {
           ballGrabbed = false;
-          ballVelX *= 1.5;
-          ballVelY *= 1.5;
-          document.removeEventListener('mousemove', mousemove);
-          document.removeEventListener('mouseup', mouseup);
+          ballVelX *= 1.5; ballVelY *= 1.5;
+          document.removeEventListener('mousemove', mm);
+          document.removeEventListener('mouseup',   mu);
         };
-        
-        document.addEventListener('mousemove', mousemove);
-        document.addEventListener('mouseup', mouseup);
+        document.addEventListener('mousemove', mm);
+        document.addEventListener('mouseup',   mu);
       });
-      
+
+      // ── cat drag ──────────────────────────────────────────────────────────────
       nekoEl.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
-        grabbing = true;
-        isFollowing = false;
-        forceSleep = false;
-        chasingBall = false;
-        const rect = container.getBoundingClientRect();
-        let startX = e.clientX - rect.left;
-        let startY = e.clientY - rect.top;
-        let startNekoX = nekoPosX;
-        let startNekoY = nekoPosY;
-        let grabInterval;
-        
-        const mousemove = (e) => {
-          const rect = container.getBoundingClientRect();
-          const currentX = e.clientX - rect.left;
-          const currentY = e.clientY - rect.top;
-          const deltaX = currentX - startX;
-          const deltaY = currentY - startY;
-          const absDeltaX = Math.abs(deltaX);
-          const absDeltaY = Math.abs(deltaY);
-          
-          if (absDeltaX > absDeltaY && absDeltaX > 10) {
-            setSprite(deltaX > 0 ? 'scratchWallW' : 'scratchWallE', frameCount);
-          } else if (absDeltaY > absDeltaX && absDeltaY > 10) {
-            setSprite(deltaY > 0 ? 'scratchWallN' : 'scratchWallS', frameCount);
-          }
-          
-          if (grabStop || absDeltaX > 10 || absDeltaY > 10) {
+        grabbing     = true;
+        isFollowing  = false;
+        forceSleep   = false;
+        chasingBall  = false;
+        const r      = container.getBoundingClientRect();
+        let sx       = e.clientX - r.left;
+        let sy       = e.clientY - r.top;
+        let snx      = nekoPosX;
+        let sny      = nekoPosY;
+        let gi;
+
+        const mm = (e) => {
+          const r2 = container.getBoundingClientRect();
+          const cx  = e.clientX - r2.left;
+          const cy  = e.clientY - r2.top;
+          const dx  = cx - sx, dy = cy - sy;
+          const adx = Math.abs(dx), ady = Math.abs(dy);
+          if (adx > ady && adx > 10) setSprite(dx > 0 ? 'scratchWallW' : 'scratchWallE', frameCount);
+          else if (ady > adx && ady > 10) setSprite(dy > 0 ? 'scratchWallN' : 'scratchWallS', frameCount);
+          if (grabStop || adx > 10 || ady > 10) {
             grabStop = false;
-            clearTimeout(grabInterval);
-            grabInterval = setTimeout(() => {
-              grabStop = true;
-              nudge = false;
-              startX = currentX;
-              startY = currentY;
-              startNekoX = nekoPosX;
-              startNekoY = nekoPosY;
-            }, 150);
+            clearTimeout(gi);
+            gi = setTimeout(() => { grabStop = true; nudge = false; sx = cx; sy = cy; snx = nekoPosX; sny = nekoPosY; }, 150);
           }
-          
-          nekoPosX = startNekoX + currentX - startX;
-          nekoPosY = startNekoY + currentY - startY;
+          nekoPosX = clampX(snx + cx - sx);
+          nekoPosY = clampY(sny + cy - sy);
           nekoEl.style.left = \`\${nekoPosX - 16}px\`;
-          nekoEl.style.top = \`\${nekoPosY - 16}px\`;
+          nekoEl.style.top  = \`\${nekoPosY - 16}px\`;
         };
-        
-        const mouseup = () => {
-          grabbing = false;
-          nudge = true;
-          resetIdleAnimation();
-          saveState();
-          document.removeEventListener('mousemove', mousemove);
-          document.removeEventListener('mouseup', mouseup);
+        const mu = () => {
+          grabbing = false; nudge = true;
+          resetIdleAnimation(); saveState();
+          document.removeEventListener('mousemove', mm);
+          document.removeEventListener('mouseup',   mu);
         };
-        
-        document.addEventListener('mousemove', mousemove);
-        document.addEventListener('mouseup', mouseup);
+        document.addEventListener('mousemove', mm);
+        document.addEventListener('mouseup',   mu);
       });
-      
+
       nekoEl.addEventListener('dblclick', () => {
-        forceSleep = !forceSleep;
-        isFollowing = false;
-        chasingBall = false;
-        nudge = false;
-        if (!forceSleep) {
-          resetIdleAnimation();
-        }
+        forceSleep  = !forceSleep;
+        isFollowing = false; chasingBall = false; nudge = false;
+        if (!forceSleep) resetIdleAnimation();
         saveState();
       });
-      
-      nekoEl.style.left = \`\${nekoPosX - 16}px\`;
-      nekoEl.style.top = \`\${nekoPosY - 16}px\`;
-      
+
+      // ── init ──────────────────────────────────────────────────────────────────
+      // Use requestAnimationFrame-based init so we get real dimensions
+      requestAnimationFrame(() => {
+        rect     = getRect();
+        nekoPosX = rect.width  / 2;
+        nekoPosY = rect.height / 2;
+        mousePosX= nekoPosX;
+        mousePosY= nekoPosY;
+        nekoEl.style.left = \`\${nekoPosX - 16}px\`;
+        nekoEl.style.top  = \`\${nekoPosY - 16}px\`;
+      });
+
+      pickNewMood();
       startRoaming();
       setInterval(frame, 100);
-      
+
+      // ── message handler ───────────────────────────────────────────────────────
       window.addEventListener('message', event => {
-        const message = event.data;
-        switch (message.command) {
+        const msg = event.data;
+        switch (msg.command) {
           case 'restoreState':
-            if (message.state) {
-              nekoPosX = message.state.nekoPosX || nekoPosX;
-              nekoPosY = message.state.nekoPosY || nekoPosY;
-              forceSleep = message.state.forceSleep || false;
-              nekoSpeed = message.state.nekoSpeed || 10;
-              ballActive = message.state.ballActive || false;
-              ballX = message.state.ballX || ballX;
-              ballY = message.state.ballY || ballY;
+            if (msg.state) {
+              const r = getRect();
+              // Clamp restored positions to current viewport
+              nekoPosX   = clampX(msg.state.nekoPosX || r.width  / 2);
+              nekoPosY   = clampY(msg.state.nekoPosY || r.height / 2);
+              forceSleep = msg.state.forceSleep || false;
+              nekoSpeed  = msg.state.nekoSpeed  || 10;
+              ballActive = msg.state.ballActive || false;
+              // Clamp ball too
+              ballX = clampBallX(msg.state.ballX || r.width  / 2);
+              ballY = clampBallY(msg.state.ballY || r.height / 2);
               if (ballActive) ballEl.classList.add('active');
               nekoEl.style.left = \`\${nekoPosX - 16}px\`;
-              nekoEl.style.top = \`\${nekoPosY - 16}px\`;
+              nekoEl.style.top  = \`\${nekoPosY - 16}px\`;
             }
             break;
-          case 'toggleBall':
+
+          case 'toggleBall': {
             ballActive = !ballActive;
             if (ballActive) {
-              const rect = container.getBoundingClientRect();
-              ballX = rect.width / 2;
-              ballY = rect.height / 2;
-              ballVelX = 0;
-              ballVelY = 0;
+              // Always spawn ball at safe center of current viewport
+              const r = getRect();
+              ballX    = r.width  / 2;
+              ballY    = r.height / 2;
+              ballVelX = 0; ballVelY = 0;
               ballEl.classList.add('active');
+              ballEl.style.left = \`\${ballX - ballRadius}px\`;
+              ballEl.style.top  = \`\${ballY - ballRadius}px\`;
             } else {
               ballEl.classList.remove('active');
               chasingBall = false;
             }
             saveState();
             break;
+          }
+
           case 'toggleSleep':
-            forceSleep = !forceSleep;
-            isFollowing = false;
-            chasingBall = false;
-            nudge = false;
+            forceSleep  = !forceSleep;
+            isFollowing = false; chasingBall = false; nudge = false;
             if (!forceSleep) resetIdleAnimation();
             saveState();
             break;
-          case 'reset':
-            const rect = container.getBoundingClientRect();
-            nekoPosX = rect.width / 2;
-            nekoPosY = rect.height / 2;
-            forceSleep = false;
-            isFollowing = false;
-            roamTarget = null;
-            chasingBall = false;
+
+          case 'reset': {
+            const r  = getRect();
+            nekoPosX = r.width  / 2;
+            nekoPosY = r.height / 2;
+            forceSleep  = false; isFollowing = false;
+            roamTarget  = null;  chasingBall = false;
+            stuckFrames = 0;
+            if (roamTimer) clearInterval(roamTimer);
+            startRoaming();
             saveState();
             break;
+          }
+
           case 'setSpeed':
-            nekoSpeed = message.speed;
+            nekoSpeed    = msg.speed;
+            zoomiesSpeed = nekoSpeed * 2.5;
             saveState();
             break;
+
           case 'pet':
+            // Wake up if sleeping, react happily
+            forceSleep = false;
+            resetIdleAnimation();
             setSprite('alert', 0);
-            setTimeout(() => setSprite('idle', 0), 1000);
+            setTimeout(() => setSprite('idle', 0), 500);
+            setTimeout(() => setSprite('scratchSelf', 0), 1000);
+            setTimeout(() => setSprite('idle', 0), 1800);
+            catMood   = 'normal';
+            moodTimer = 200;
             break;
+
           case 'setBackground':
-            if (message.background) {
+            if (msg.background) {
               let bgUrl;
-              if (message.isCustom) {
-                bgUrl = message.background;
+              if (msg.isCustom) {
+                bgUrl = msg.background;
               } else {
-                bgUrl = '${webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'resources'))}/' + message.background;
+                bgUrl = '${webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'resources'))}/' + msg.background;
               }
-              document.body.style.backgroundImage = "url('" + bgUrl + "')";
-              document.body.style.backgroundSize = 'cover';
+              document.body.style.backgroundImage    = "url('" + bgUrl + "')";
+              document.body.style.backgroundSize     = 'cover';
               document.body.style.backgroundPosition = 'center';
-              document.body.style.backgroundRepeat = 'no-repeat';
+              document.body.style.backgroundRepeat   = 'no-repeat';
             } else {
               document.body.style.backgroundImage = '';
             }
             break;
-          case 'setSkin':
-            const resourcesUri = '${webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'resources'))}';
-            const newSkinUri = resourcesUri + '/' + message.skin;
-            nekoEl.style.backgroundImage = \`url('\${newSkinUri}')\`;
+
+          case 'setSkin': {
+            const uri = '${webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'resources'))}/' + msg.skin;
+            nekoEl.style.backgroundImage = \`url('\${uri}')\`;
             break;
+          }
         }
       });
     })();
